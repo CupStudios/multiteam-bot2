@@ -3,6 +3,27 @@ const { normalizeId } = require('../utils/ids');
 
 const sessionByUser = new Map();
 
+const botPromptSnippets = [
+  '¡Iniciando tu ficha!',
+  'dime el nombre de tu **Personaje**',
+  'dime la **Edad**',
+  '¿Cuál es la **Sexualidad**',
+  'Pasamos al Off Rol',
+  '¿Cuáles son tus **Pronombres**',
+  '¡Último paso!',
+  'adjunta una imagen',
+  '¿Es correcto? (s/n)',
+  '¿Es la imagen/video correcto? (s/n)',
+  'Entrada no válida',
+  'Tu ficha ha sido completada y guardada'
+];
+
+function isBotPromptEcho(message, text) {
+  if (!message.fromMe || !text) return false;
+  return botPromptSnippets.some((snippet) => text.includes(snippet));
+}
+
+
 const retryMessages = {
   1: 'Vale, sin problema. Escribe de nuevo el nombre de tu **Personaje**:',
   2: 'Entendido. Dime de nuevo la **Edad** de tu personaje (On Rol):',
@@ -82,6 +103,12 @@ async function handleSessionMessage(client, message) {
 
   const state = sessionByUser.get(senderId);
   const text = (message.body || '').trim();
+
+  // NOTE: owner/self-hosted mode can produce fromMe echoes for bot prompts.
+  // Ignore those echoes so they don't get interpreted as ficha answers.
+  if (isBotPromptEcho(message, text)) {
+    return true;
+  }
 
   if (text.startsWith('!')) {
     // Ignore other commands while waiting for ficha answers.

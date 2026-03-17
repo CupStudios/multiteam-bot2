@@ -13,10 +13,9 @@ function registerMessageCreateEvent(client, commandHandler) {
         return;
       }
 
-      // Keep interactive ficha flow for participant messages; own bot replies are ignored to avoid self-looping.
-      if (!message.fromMe) {
-        await fichaFlowService.handleSessionMessage(client, message);
-      }
+      // Process ficha sessions for both participants and owner-hosted (`fromMe`) usage.
+      // Echoed bot prompts are filtered inside fichaFlowService.
+      await fichaFlowService.handleSessionMessage(client, message);
     } catch (error) {
       logger.error('Failed handling message_create event', error);
     }
