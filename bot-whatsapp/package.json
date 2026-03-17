@@ -1,0 +1,19 @@
+{
+  "name": "bot-whatsapp",
+  "version": "1.0.0",
+  "description": "Production-ready WhatsApp bot scaffold using whatsapp-web.js",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "reset:auth": "rm -rf .wwebjs_auth .last-qr.txt"
+  },
+  "dependencies": {
+    "puppeteer": "^24.5.0",
+    "whatsapp-web.js": "^1.26.0"
+  }
+}
