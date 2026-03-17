@@ -8,6 +8,9 @@ const helpText = `╭━━━━━━━━━━━━━━━━━━━�
 ├ ➭ *!ficha*
 │ Inicia el registro interactivo de tu personaje.
 │
+├ ➭ *!cancelar*
+│ Cancela el registro interactivo actual.
+│
 ├ ➭ *!verbio @usuario*
 │ Muestra la ficha oficial y foto de la persona mencionada.
 │
