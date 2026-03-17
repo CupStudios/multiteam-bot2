@@ -1,0 +1,9 @@
+{
+  "name": "multiteam-bot2",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix bot-whatsapp run start",
+    "dev": "npm --prefix bot-whatsapp run dev",
+    "reset:auth": "npm --prefix bot-whatsapp run reset:auth"
+  }
+}

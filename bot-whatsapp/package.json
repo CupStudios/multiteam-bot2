@@ -9,7 +9,8 @@
   },
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "reset:auth": "rm -rf .wwebjs_auth .last-qr.txt"
   },
   "dependencies": {
     "puppeteer": "^24.5.0",
