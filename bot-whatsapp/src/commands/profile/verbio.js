@@ -1,24 +1,35 @@
 const fs = require('fs');
 const { MessageMedia } = require('whatsapp-web.js');
 const fichaService = require('../../services/fichaService');
+const { getTargetUser } = require('../../utils/mentions');
 
 module.exports = {
   // NOTE: uploaded file was named `verbio.js`, but exported command `verficha`; we standardize on `verbio` to match help text.
   name: 'verbio',
   async execute({ client, message }) {
-    const mentions = await message.getMentions();
-    const targetId = mentions[0]?.id?._serialized || message.author || message.from;
-    const contact = mentions[0] || await client.getContactById(targetId);
+    // NOTE: `getMentions()` can be empty in some whatsapp-web.js situations.
+    // We prioritize `mentionedIds` via `getTargetUser(...)` for reliable mention resolution.
+    const targetId = getTargetUser(message);
+    const isMentionQuery = Array.isArray(message.mentionedIds) && message.mentionedIds.length > 0;
+
     const profile = await fichaService.getFicha(targetId);
 
     if (!profile?.description) {
-      await message.reply(mentions.length > 0
+      await message.reply(isMentionQuery
         ? '⚠️ Esta persona no tiene una ficha registrada.'
         : '⚠️ Aún no tienes una ficha. ¡Crea una enviando *!ficha*!');
       return;
     }
 
-    const userNumber = contact.id?.user || targetId.split('@')[0];
+    let userNumber = targetId.split('@')[0];
+
+    try {
+      const contact = await client.getContactById(targetId);
+      userNumber = contact?.id?.user || userNumber;
+    } catch {
+      // Ignore contact lookup failures and fallback to numeric id.
+    }
+
     const caption = `*Ficha de @${userNumber}*:\n\n${profile.description}`;
 
     if (profile.photoFileName) {
