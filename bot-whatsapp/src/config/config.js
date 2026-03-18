@@ -8,5 +8,6 @@ module.exports = {
   qrRawPath: path.resolve(__dirname, '../../.last-qr.txt'),
   commandsPath: path.resolve(__dirname, '../commands'),
   dbPath: path.resolve(__dirname, '../database'),
-  mediaPath: path.resolve(__dirname, '../../media')
+  mediaPath: path.resolve(__dirname, '../../media'),
+  fichaGroupId: process.env.FICHA_GROUP_ID || '260412658430026@g.us'
 };

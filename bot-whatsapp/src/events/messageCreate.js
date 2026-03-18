@@ -1,12 +1,24 @@
 const config = require('../config/config');
+const fichaFlowService = require('../services/fichaFlowService');
+const logger = require('../utils/logger');
 
-// Message event binding: filters messages and forwards commands.
 function registerMessageCreateEvent(client, commandHandler) {
   client.on('message_create', async (message) => {
-    if (message.fromMe) return;
-    if (typeof message.body !== 'string' || !message.body.startsWith(config.prefix)) return;
+    try {
+      const body = typeof message.body === 'string' ? message.body : '';
 
-    await commandHandler.handleMessage(client, message);
+      if (body.startsWith(config.prefix)) {
+        // NOTE: Commands are allowed from the bot author account (`fromMe`) for self-hosted setups.
+        await commandHandler.handleMessage(client, message);
+        return;
+      }
+
+      // Process ficha sessions for both participants and owner-hosted (`fromMe`) usage.
+      // Echoed bot prompts are filtered inside fichaFlowService.
+      await fichaFlowService.handleSessionMessage(client, message);
+    } catch (error) {
+      logger.error('Failed handling message_create event', error);
+    }
   });
 }
 
