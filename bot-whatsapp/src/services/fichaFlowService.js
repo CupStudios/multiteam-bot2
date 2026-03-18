@@ -5,15 +5,15 @@ const sessionByUser = new Map();
 
 const botPromptSnippets = [
   '¡Iniciando tu ficha!',
-  'dime el nombre de tu **Personaje**',
-  'dime la **Edad**',
-  '¿Cuál es la **Sexualidad**',
-  'Pasamos al Off Rol',
-  '¿Cuáles son tus **Pronombres**',
-  '¡Último paso!',
-  'adjunta una imagen',
+  'Por favor, dime el nombre de tu **Personaje**',
+  '¡Anotado! Ahora dime la **Edad**',
+  'Perfecto. ¿Cuál es la **Sexualidad**',
+  '¡Genial! Pasamos al Off Rol',
+  'Casi terminamos. ¿Cuáles son tus **Pronombres**',
+  '¡Último paso! Por favor, envíame la **imagen o video**',
+  'Anoté:',
   '¿Es correcto? (s/n)',
-  '¿Es la imagen/video correcto? (s/n)',
+  '🖼️ Archivo multimedia recibido. ¿Es la imagen/video correcto? (s/n)',
   'Entrada no válida',
   'Tu ficha ha sido completada y guardada'
 ];
@@ -63,22 +63,23 @@ function hasSession(userId) {
 
 async function askNextQuestion(message, state) {
   switch (state.step) {
-    case 1:
+    case 2: // después de confirmar PERSONAJE
       await message.reply('¡Anotado! Ahora dime la **Edad** de tu personaje (On Rol):');
       return;
-    case 2:
+    case 3: // después de confirmar EDAD ON
       await message.reply('Perfecto. ¿Cuál es la **Sexualidad** de tu personaje?');
       return;
-    case 3:
+    case 4: // después de confirmar SEXUALIDAD
       await message.reply('¡Genial! Pasamos al Off Rol. ¿Cuál es tu **Edad** real?');
       return;
-    case 4:
+    case 5: // después de confirmar EDAD OFF
       await message.reply('Casi terminamos. ¿Cuáles son tus **Pronombres**?');
       return;
-    case 5:
+    case 6: // después de confirmar PRONOMBRES -> pedir media
       await message.reply('¡Último paso! Por favor, envíame la **imagen o video** de tu personaje adjunta en tu próximo mensaje.');
       return;
     default:
+      return;
   }
 }
 
