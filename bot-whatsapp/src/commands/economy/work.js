@@ -8,6 +8,10 @@ module.exports = {
 
     try {
       const tx = await economyService.work(senderId);
+      if (tx.multiplier > 1) {
+        await message.reply(`⚒️ Trabajaste duro y ganaste **${tx.salary} Yenes** (x${tx.multiplier} por Café Expreso Doble).`);
+        return;
+      }
       await message.reply(`⚒️ Trabajaste duro y ganaste **${tx.salary} Yenes**.`);
     } catch (error) {
       if (error.message.startsWith('WORK_COOLDOWN:')) {

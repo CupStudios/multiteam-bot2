@@ -8,6 +8,10 @@ module.exports = {
     try {
       const tx = await economyService.roll(senderId);
       if (tx.success) {
+        if (tx.forcedSuccess) {
+          await message.reply(`🎲 Tu Dado Trucado se activó: tirada garantizada. Ganaste **${tx.reward} Yenes**.`);
+          return;
+        }
         await message.reply(`🎲 ¡Tiraste los dados y ganaste! Recibes **${tx.reward} Yenes**.`);
       } else {
         await message.reply(`🎲 Los dados no te favorecieron. ¡Perdiste **${tx.fine} Yenes**! Suerte para la próxima.`);

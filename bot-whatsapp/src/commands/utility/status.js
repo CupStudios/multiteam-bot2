@@ -24,6 +24,9 @@ module.exports = {
     const activeItems = status.activeItems.length > 0
       ? status.activeItems.map((item) => `• ${item.name}: ${item.remaining.minutes}m ${item.remaining.seconds}s`).join('\n')
       : '• Ninguno';
+    const inventoryLines = Object.entries(status.inventory || {})
+      .map(([key, qty]) => `• ${key}: x${qty}`)
+      .join('\n') || '• Vacío';
 
     const info = [
       '📊 *ESTADO DEL BOT*',
@@ -40,7 +43,10 @@ module.exports = {
       `💴 Billetera: *${status.wallet}*`,
       `🏛️ Banco: *${status.bank}*`,
       `💰 Total: *${status.total}*`,
-      `⚙️ Multiplicador de cooldown: *x${status.cooldownMultiplier}*`
+      `⚙️ Multiplicador de cooldown: *x${status.cooldownMultiplier}*`,
+      '',
+      '🎒 *Inventario*',
+      inventoryLines
     ];
 
     await message.reply(info.join('\n'));
