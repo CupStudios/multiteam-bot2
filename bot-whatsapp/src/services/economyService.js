@@ -15,12 +15,16 @@ function createDefaultEconomyUser() {
     lastWork: 0,
     lastRob: 0,
     lastRoll: 0,
+    effects: {
+      cafeUntil: 0
+    },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 }
 
 function normalizeEconomyUserShape(user = {}) {
+  const effects = user.effects && typeof user.effects === 'object' ? user.effects : {};
   return {
     ...createDefaultEconomyUser(),
     ...user,
@@ -32,8 +36,22 @@ function normalizeEconomyUserShape(user = {}) {
     lastWork: typeof user.lastWork === 'number' ? user.lastWork : 0,
     lastRob: typeof user.lastRob === 'number' ? user.lastRob : 0,
     lastRoll: typeof user.lastRoll === 'number' ? user.lastRoll : 0,
+    effects: {
+      cafeUntil: typeof effects.cafeUntil === 'number' ? effects.cafeUntil : 0
+    },
     updatedAt: new Date().toISOString()
   };
+}
+
+function getCooldownMultiplier(user, now = Date.now()) {
+  return user.effects.cafeUntil > now ? 0.5 : 1;
+}
+
+function formatRemainingMs(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return { minutes, seconds };
 }
 
 async function ensureUser(userId) {
@@ -110,20 +128,108 @@ async function transferToWallet(userId, amountText) {
   return data.lastTransaction.amount;
 }
 
-async function claimDaily(userId) {
+async function pay(senderId, receiverId, amountText) {
+  const normalizedSender = normalizeId(senderId);
+  const normalizedReceiver = normalizeId(receiverId);
+  const amount = Number.parseInt(amountText, 10);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('INVALID_PAY_AMOUNT');
+  }
+
+  if (normalizedSender === normalizedReceiver) {
+    throw new Error('PAY_SELF');
+  }
+
+  return economyDb.update(async (state) => {
+    const sender = normalizeEconomyUserShape(state.users[normalizedSender]);
+    const receiver = normalizeEconomyUserShape(state.users[normalizedReceiver]);
+
+    if (sender.wallet < amount) {
+      throw new Error('PAY_NO_FUNDS');
+    }
+
+    sender.wallet -= amount;
+    receiver.wallet += amount;
+    sender.updatedAt = new Date().toISOString();
+    receiver.updatedAt = sender.updatedAt;
+
+    state.users[normalizedSender] = sender;
+    state.users[normalizedReceiver] = receiver;
+    state.lastTransaction = { type: 'pay', senderId: normalizedSender, receiverId: normalizedReceiver, amount, at: sender.updatedAt };
+    return state;
+  }).then((state) => state.lastTransaction);
+}
+
+async function buyCafe(userId) {
   const normalized = normalizeId(userId);
+  const price = 1200;
+  const durationMs = 30 * 60 * 1000;
   const now = Date.now();
-  const oneDay = 24 * 60 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
 
-    if (now - user.lastDaily < oneDay) {
-      const hoursLeft = Math.ceil((oneDay - (now - user.lastDaily)) / (1000 * 60 * 60));
+    if (user.wallet < price) {
+      throw new Error('SHOP_NO_FUNDS');
+    }
+
+    user.wallet -= price;
+    user.effects.cafeUntil = Math.max(user.effects.cafeUntil, now) + durationMs;
+    user.updatedAt = new Date().toISOString();
+
+    state.users[normalized] = user;
+    state.lastTransaction = {
+      type: 'shop',
+      item: 'cafe',
+      userId: normalized,
+      price,
+      activeUntil: user.effects.cafeUntil,
+      at: user.updatedAt
+    };
+    return state;
+  }).then((state) => state.lastTransaction);
+}
+
+async function getStatus(userId) {
+  const user = await getUser(userId);
+  const now = Date.now();
+  const activeItems = [];
+
+  if (user.effects.cafeUntil > now) {
+    activeItems.push({
+      key: 'cafe',
+      name: 'Café',
+      description: 'Reduce a la mitad los cooldowns de economía.',
+      remainingMs: user.effects.cafeUntil - now,
+      remaining: formatRemainingMs(user.effects.cafeUntil - now)
+    });
+  }
+
+  return {
+    wallet: user.wallet,
+    bank: user.bank,
+    total: user.wallet + user.bank,
+    cooldownMultiplier: getCooldownMultiplier(user, now),
+    activeItems
+  };
+}
+
+async function claimDaily(userId) {
+  const normalized = normalizeId(userId);
+  const now = Date.now();
+  const baseCooldown = 24 * 60 * 60 * 1000;
+
+  return economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(user, now));
+
+    if (now - user.lastDaily < cooldown) {
+      const hoursLeft = Math.ceil((cooldown - (now - user.lastDaily)) / (1000 * 60 * 60));
       throw new Error(`DAILY_COOLDOWN:${hoursLeft}`);
     }
 
-    user.dailyStreak = now - user.lastDaily < oneDay * 2 ? user.dailyStreak + 1 : 1;
+    user.dailyStreak = now - user.lastDaily < baseCooldown * 2 ? user.dailyStreak + 1 : 1;
     const reward = 500 + user.dailyStreak * 50;
 
     user.wallet += reward;
@@ -139,10 +245,11 @@ async function claimDaily(userId) {
 async function work(userId) {
   const normalized = normalizeId(userId);
   const now = Date.now();
-  const cooldown = 10 * 60 * 1000;
+  const baseCooldown = 10 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(user, now));
 
     if (now - user.lastWork < cooldown) {
       const minutesLeft = Math.ceil((cooldown - (now - user.lastWork)) / (1000 * 60));
@@ -163,10 +270,11 @@ async function work(userId) {
 async function roll(userId) {
   const normalized = normalizeId(userId);
   const now = Date.now();
-  const cooldown = 2 * 60 * 1000;
+  const baseCooldown = 2 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(user, now));
 
     if (now - user.lastRoll < cooldown) {
       const minutesLeft = Math.ceil((cooldown - (now - user.lastRoll)) / (1000 * 60));
@@ -195,7 +303,7 @@ async function rob(thiefId, victimId) {
   const normalizedThief = normalizeId(thiefId);
   const normalizedVictim = normalizeId(victimId);
   const now = Date.now();
-  const cooldown = 30 * 60 * 1000;
+  const baseCooldown = 30 * 60 * 1000;
 
   if (normalizedThief === normalizedVictim) {
     throw new Error('ROB_SELF');
@@ -204,6 +312,7 @@ async function rob(thiefId, victimId) {
   return economyDb.update(async (state) => {
     const thief = normalizeEconomyUserShape(state.users[normalizedThief]);
     const victim = normalizeEconomyUserShape(state.users[normalizedVictim]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(thief, now));
 
     if (now - thief.lastRob < cooldown) {
       throw new Error('ROB_COOLDOWN');
@@ -258,6 +367,9 @@ module.exports = {
   getWalletBank,
   transferToBank,
   transferToWallet,
+  pay,
+  buyCafe,
+  getStatus,
   claimDaily,
   work,
   roll,
