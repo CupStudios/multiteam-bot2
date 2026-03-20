@@ -387,7 +387,7 @@ async function claimDaily(userId) {
 async function work(userId) {
   const normalized = normalizeId(userId);
   const now = Date.now();
-  const baseCooldown = 10 * 60 * 1000;
+  const baseCooldown = 3 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
