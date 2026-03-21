@@ -67,7 +67,7 @@ const SHOP_ITEMS = [
     key: 'double_espresso',
     name: 'Café Expreso Doble',
     emoji: '☕',
-    price: 2500,
+    price: 1000,
     category: 'medios',
     aliases: ['cafe', 'expreso', 'cafe_doble'],
     usable: true,
