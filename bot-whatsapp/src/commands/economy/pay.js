@@ -1,28 +1,38 @@
+const economyService = require('../../services/economyService');
+
 module.exports = {
   name: 'pay',
-  execute: async ({ message, args, remitenteId, economia, guardarDatos, ARCHIVO_ECONOMIA, initUser }) => {
-    const menciones = await message.getMentions();
-    const monto = parseInt(args[1] || args[0]); // Maneja si ponen !pay @user 100 o !pay 100 @user
+  async execute({ message, args }) {
+    const mentions = await message.getMentions();
+    const amountText = args.find((value) => /^\d+$/.test(value));
 
-    if (!menciones.length || isNaN(monto) || monto <= 0) {
-      return message.reply('⚠️ Uso: *!pay @usuario [cantidad]*');
+    if (mentions.length === 0 || !amountText) {
+      await message.reply('⚠️ Uso: *!pay @usuario [cantidad]*');
+      return;
     }
 
-    const receptorId = initUser(menciones[0].id);
-    const userEmisor = economia[remitenteId];
+    const senderId = message.author || message.from;
+    const receiverId = mentions[0].id._serialized;
 
-    if (userEmisor.wallet < monto) {
-      return message.reply('❌ No tienes suficiente dinero en tu billetera.');
+    try {
+      const tx = await economyService.pay(senderId, receiverId, amountText);
+      await message.reply(`💸 Has enviado **${tx.amount} Yenes** a @${mentions[0].id.user}.`, undefined, {
+        mentions: [receiverId]
+      });
+    } catch (error) {
+      if (error.message === 'INVALID_PAY_AMOUNT') {
+        await message.reply('❌ Cantidad inválida. Debe ser un número mayor a 0.');
+        return;
+      }
+      if (error.message === 'PAY_SELF') {
+        await message.reply('❌ No puedes enviarte dinero a ti mismo.');
+        return;
+      }
+      if (error.message === 'PAY_NO_FUNDS') {
+        await message.reply('❌ No tienes suficiente dinero en la billetera.');
+        return;
+      }
+      throw error;
     }
-
-    // Proceso de transferencia
-    userEmisor.wallet -= monto;
-    economia[receptorId].wallet += monto;
-
-    guardarDatos(ARCHIVO_ECONOMIA, economia);
-    
-    return message.reply(`💸 Has enviado **${monto} Yenes** a @${menciones[0].id.user}.`, {
-      mentions: [menciones[0].id._serialized]
-    });
   }
 };
