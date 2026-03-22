@@ -6,6 +6,8 @@ const { findItemByKey } = require('./shopCatalog');
 const economyDb = new JsonDb(path.resolve(__dirname, '../database/economy.json'), {
   users: {}
 });
+const PRESTIGE_MIN_ASSETS = 15000;
+const PRESTIGE_ALLOWED_CLASSES = new Set(['mid_plus', 'upper', 'upper_plus', 'elite']);
 
 function createDefaultEconomyUser() {
   return {
@@ -596,7 +598,7 @@ async function requestPrestige(userId) {
     const socialClass = getSocialClass(user);
     const assets = user.wallet + user.bank + getInventoryValue(user);
 
-    if (assets < 15000 || ['low', 'low_plus', 'mid_low', 'mid'].includes(socialClass.key)) {
+    if (assets < PRESTIGE_MIN_ASSETS || !PRESTIGE_ALLOWED_CLASSES.has(socialClass.key)) {
       throw new Error('PRESTIGE_REQUIREMENTS');
     }
 
@@ -607,6 +609,20 @@ async function requestPrestige(userId) {
   });
 
   return data.users[normalized];
+}
+
+async function getPrestigeRequirements(userId) {
+  const user = await getUser(userId);
+  const socialClass = getSocialClass(user);
+  const assets = user.wallet + user.bank + getInventoryValue(user);
+  return {
+    minAssets: PRESTIGE_MIN_ASSETS,
+    minClass: 'Clase Media Alta',
+    currentAssets: assets,
+    currentClass: socialClass.label,
+    meetsAssets: assets >= PRESTIGE_MIN_ASSETS,
+    meetsClass: PRESTIGE_ALLOWED_CLASSES.has(socialClass.key)
+  };
 }
 
 async function confirmPrestige(userId) {
@@ -659,5 +675,6 @@ module.exports = {
   rob,
   getLeaderboard,
   requestPrestige,
-  confirmPrestige
+  confirmPrestige,
+  getPrestigeRequirements
 };

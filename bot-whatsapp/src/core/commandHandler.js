@@ -54,7 +54,7 @@ class CommandHandler {
     if (!command) return;
 
     try {
-      const responseDelayMs = (Math.floor(Math.random() * 4) + 1) * 80;
+      const responseDelayMs = (Math.floor(Math.random() * 4) + 1) * 1000;
       await new Promise((resolve) => setTimeout(resolve, responseDelayMs));
       await command.execute({ client, message, args });
     } catch (error) {

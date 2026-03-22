@@ -13,11 +13,19 @@ module.exports = {
         return;
       }
 
+      const req = await economyService.getPrestigeRequirements(senderId);
+
+      if (action === 'requisitos') {
+        await message.reply(`📜 *Requisitos de Prestige*\n• Patrimonio mínimo: *${req.minAssets}* Yenes (dinero + valor de inventario)\n• Clase mínima: *${req.minClass}*\n\n📊 *Tu progreso*\n• Patrimonio actual: *${req.currentAssets}*\n• Clase actual: *${req.currentClass}*\n• Patrimonio: *${req.meetsAssets ? '✅' : '❌'}*\n• Clase: *${req.meetsClass ? '✅' : '❌'}*`);
+        return;
+      }
+
       await economyService.requestPrestige(senderId);
-      await message.reply('⚠️ Vas a reiniciar tu dinero, banco, inventario y clase social.\nSi estás seguro, escribe: *!prestige confirmar*');
+      await message.reply(`📜 *Requisitos de Prestige*\n• Patrimonio mínimo: *${req.minAssets}* Yenes\n• Clase mínima: *${req.minClass}*\n\n⚠️ Vas a reiniciar tu dinero, banco, inventario y clase social.\nSi estás seguro, escribe: *!prestige confirmar*`);
     } catch (error) {
       if (error.message === 'PRESTIGE_REQUIREMENTS') {
-        await message.reply('❌ No cumples los requisitos de prestigio todavía. Mejora tu clase social y patrimonio primero.');
+        const req = await economyService.getPrestigeRequirements(senderId);
+        await message.reply(`❌ No cumples los requisitos de prestigio.\n\n📜 Requisitos: *${req.minAssets}* Yenes y clase *${req.minClass}*.\n📊 Actualmente: *${req.currentAssets}* Yenes y clase *${req.currentClass}*.`);
         return;
       }
       if (error.message === 'PRESTIGE_NOT_PENDING') {

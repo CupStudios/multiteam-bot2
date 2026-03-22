@@ -57,8 +57,11 @@ const helpText = `╭━━━━━━━━━━━━━━━━━━━�
 ├ ➭ *!status*
 │ Muestra ping, uptime, efectos, clase social y prestigio.
 │
-├ ➭ *!prestige* y *!prestige confirmar*
-│ Reinicia progreso para subir prestigio y ganar bonificaciones permanentes.
+├ ➭ *!prestige*, *!prestige requisitos* y *!prestige confirmar*
+│ Consulta requisitos de prestigio y confirma el reinicio cuando estés listo.
+│
+├ ➭ *!clases*
+│ Explica el sistema de clases y qué comprar para subir más rápido.
 │
 └──
 
