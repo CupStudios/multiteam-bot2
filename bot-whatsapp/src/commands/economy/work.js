@@ -2,7 +2,7 @@ const economyService = require('../../services/economyService');
 
 module.exports = {
   name: 'work',
-  description: 'Trabaja para ganar Yenes (10 min de cooldown).',
+  description: 'Trabaja para ganar Yenes (3 min de cooldown).',
   async execute({ message }) {
     const senderId = message.author || message.from;
 
