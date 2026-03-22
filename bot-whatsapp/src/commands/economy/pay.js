@@ -1,22 +1,30 @@
 const economyService = require('../../services/economyService');
+const { normalizeId } = require('../../utils/ids');
 
 module.exports = {
   name: 'pay',
-  async execute({ message, args }) {
-    const mentions = await message.getMentions();
+  async execute({ client, message, args }) {
+    const mentionedIds = Array.isArray(message.mentionedIds) ? message.mentionedIds : [];
     const amountText = args.find((value) => /^\d+$/.test(value));
 
-    if (mentions.length === 0 || !amountText) {
+    if (mentionedIds.length === 0 || !amountText) {
       await message.reply('⚠️ Uso: *!pay @usuario [cantidad]*');
       return;
     }
 
     const senderId = message.author || message.from;
-    const receiverId = mentions[0].id._serialized;
+    const receiverId = normalizeId(mentionedIds[0]);
+    let receiverUser = receiverId.split('@')[0];
+    try {
+      const contact = await client.getContactById(receiverId);
+      receiverUser = contact.id.user || receiverUser;
+    } catch {
+      // fallback
+    }
 
     try {
       const tx = await economyService.pay(senderId, receiverId, amountText);
-      await message.reply(`💸 Has enviado **${tx.amount} Yenes** a @${mentions[0].id.user}.`, undefined, {
+      await message.reply(`💸 Has enviado **${tx.amount} Yenes** a @${receiverUser}.`, undefined, {
         mentions: [receiverId]
       });
     } catch (error) {

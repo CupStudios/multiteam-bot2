@@ -39,9 +39,9 @@ function getItemInfo(itemQuery) {
   return item;
 }
 
-async function buyItem(userId, itemQuery) {
+async function buyItem(userId, itemQuery, quantity = 1) {
   const item = getItemInfo(itemQuery);
-  const tx = await economyService.buyItem(userId, item.key, item.price);
+  const tx = await economyService.buyItem(userId, item.key, item.price, quantity);
   return { ...tx, item };
 }
 

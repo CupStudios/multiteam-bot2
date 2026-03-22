@@ -20,7 +20,7 @@ function getShopText(pageData) {
   lines.push('');
   lines.push('Categorías: *baratos*, *medios*, *caros*');
   lines.push('Ver página: *!shop [categoria] [pagina]*');
-  lines.push('Comprar: *!shop buy [item]*');
+  lines.push('Comprar: *!shop buy [item] [cantidad]*');
   return lines.join('\n');
 }
 
@@ -62,18 +62,25 @@ module.exports = {
       return;
     }
 
-    const item = args.slice(1).join(' ');
+    const buyArgs = args.slice(1);
+    const quantityToken = buyArgs.find((value) => /^\d+$/.test(value));
+    const quantity = quantityToken ? Number.parseInt(quantityToken, 10) : 1;
+    const item = buyArgs.filter((value) => value !== quantityToken).join(' ');
     if (!item) {
       await message.reply('⚠️ Debes indicar qué ítem comprar. Ejemplo: *!shop buy platano*');
       return;
     }
 
     try {
-      const tx = await shopService.buyItem(senderId, item);
-      await message.reply(`✅ Compraste *${tx.item.name}* por **${tx.price} Yenes**.`);
+      const tx = await shopService.buyItem(senderId, item, quantity);
+      await message.reply(`✅ Compraste *${tx.item.name}* x${tx.quantity} por **${tx.totalPrice} Yenes**.`);
     } catch (error) {
       if (error.message === 'SHOP_NO_FUNDS') {
         await message.reply('❌ No tienes Yenes suficientes para esa compra.');
+        return;
+      }
+      if (error.message === 'SHOP_INVALID_QUANTITY') {
+        await message.reply('❌ Cantidad inválida. Debe ser un número mayor a 0.');
         return;
       }
       if (error.message === 'SHOP_ITEM_NOT_FOUND') {

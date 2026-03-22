@@ -207,21 +207,26 @@ async function transferToWallet(userId, amountText) {
   return data.lastTransaction.amount;
 }
 
-async function buyItem(userId, itemKey, price) {
+async function buyItem(userId, itemKey, price, quantity = 1) {
   const normalized = normalizeId(userId);
+  const parsedQuantity = Number.parseInt(quantity, 10);
+  if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+    throw new Error('SHOP_INVALID_QUANTITY');
+  }
+  const totalPrice = price * parsedQuantity;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
 
-    if (user.wallet < price) {
+    if (user.wallet < totalPrice) {
       throw new Error('SHOP_NO_FUNDS');
     }
 
-    user.wallet -= price;
-    addItem(user, itemKey, 1);
+    user.wallet -= totalPrice;
+    addItem(user, itemKey, parsedQuantity);
     user.updatedAt = new Date().toISOString();
     state.users[normalized] = user;
-    state.lastTransaction = { type: 'shop', userId: normalized, itemKey, price, at: user.updatedAt };
+    state.lastTransaction = { type: 'shop', userId: normalized, itemKey, price, quantity: parsedQuantity, totalPrice, at: user.updatedAt };
     return state;
   }).then((state) => state.lastTransaction);
 }
@@ -447,7 +452,7 @@ async function claimDaily(userId) {
 async function work(userId) {
   const normalized = normalizeId(userId);
   const now = Date.now();
-  const baseCooldown = 10 * 60 * 1000;
+  const baseCooldown = 3 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
