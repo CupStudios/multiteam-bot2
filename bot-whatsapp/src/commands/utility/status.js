@@ -43,7 +43,9 @@ module.exports = {
       `💴 Billetera: *${status.wallet}*`,
       `🏛️ Banco: *${status.bank}*`,
       `💰 Total: *${status.total}*`,
-      `⚙️ Multiplicador de cooldown: *x${status.cooldownMultiplier}*`,
+      `⚙️ Multiplicador de cooldown: *x${status.cooldownMultiplier.toFixed(2)}*`,
+      `🏷️ Clase social: *${status.socialClass}*`,
+      `🌟 Prestigio: *${status.prestige}*`,
       '',
       '🎒 *Inventario*',
       inventoryLines

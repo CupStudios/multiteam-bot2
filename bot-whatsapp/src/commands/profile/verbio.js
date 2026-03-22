@@ -33,7 +33,8 @@ module.exports = {
 
     const inventory = await economyService.listInventory(targetId);
     const crownIcon = inventory.crown > 0 ? ' 👑' : '';
-    const caption = `*Ficha de @${userNumber}${crownIcon}*:\n\n${profile.description}`;
+    const status = await economyService.getStatus(targetId);
+    const caption = `*Ficha de @${userNumber}${crownIcon}*\n*Clase social:* ${status.socialClass}\n*Prestigio:* ${status.prestige}\n\n${profile.description}`;
 
     if (profile.photoFileName) {
       const filePath = fichaService.resolveProfileImagePath(profile.photoFileName);

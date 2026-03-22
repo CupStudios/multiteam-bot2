@@ -1,6 +1,7 @@
 const path = require('path');
 const { JsonDb } = require('../database/db');
 const { normalizeId } = require('../utils/ids');
+const { findItemByKey } = require('./shopCatalog');
 
 const economyDb = new JsonDb(path.resolve(__dirname, '../database/economy.json'), {
   users: {}
@@ -18,9 +19,11 @@ function createDefaultEconomyUser() {
     effects: {
       cafeUntil: 0,
       doubleWorkUntil: 0,
-      robberMaskEquipped: false
+      robberMaskEquipped: false,
+      prestigePending: false
     },
     inventory: {},
+    prestige: 0,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -43,15 +46,19 @@ function normalizeEconomyUserShape(user = {}) {
     effects: {
       cafeUntil: typeof effects.cafeUntil === 'number' ? effects.cafeUntil : 0,
       doubleWorkUntil: typeof effects.doubleWorkUntil === 'number' ? effects.doubleWorkUntil : 0,
-      robberMaskEquipped: Boolean(effects.robberMaskEquipped)
+      robberMaskEquipped: Boolean(effects.robberMaskEquipped),
+      prestigePending: Boolean(effects.prestigePending)
     },
     inventory: { ...inventory },
+    prestige: typeof user.prestige === 'number' ? user.prestige : 0,
     updatedAt: new Date().toISOString()
   };
 }
 
 function getCooldownMultiplier(user, now = Date.now()) {
-  return user.effects.cafeUntil > now ? 0.5 : 1;
+  const cafeMultiplier = user.effects.cafeUntil > now ? 0.5 : 1;
+  const prestigeCooldownMultiplier = Math.max(0.7, 1 - ((user.prestige || 0) * 0.03));
+  return cafeMultiplier * prestigeCooldownMultiplier;
 }
 
 function formatRemainingMs(ms) {
@@ -80,6 +87,50 @@ function consumeItem(user, itemKey, quantity = 1) {
     user.inventory[itemKey] = next;
   }
   return true;
+}
+
+function getInventoryValue(user) {
+  let value = 0;
+  for (const [itemKey, qty] of Object.entries(user.inventory || {})) {
+    const item = findItemByKey(itemKey);
+    if (!item) continue;
+    value += item.price * qty;
+  }
+  return value;
+}
+
+function getSocialClass(user) {
+  const moneyValue = user.wallet + user.bank;
+  const inventoryValue = getInventoryValue(user);
+  const score = (inventoryValue * 3) + moneyValue;
+
+  if (score >= 200000) return { key: 'elite', label: 'Alta Nobleza', multiplier: 1.5, robProtectionChance: 0.4 };
+  if (score >= 120000) return { key: 'upper_plus', label: 'Clase Alta+', multiplier: 1.4, robProtectionChance: 0.33 };
+  if (score >= 70000) return { key: 'upper', label: 'Clase Alta', multiplier: 1.3, robProtectionChance: 0.26 };
+  if (score >= 35000) return { key: 'mid_plus', label: 'Clase Media Alta', multiplier: 1.2, robProtectionChance: 0.18 };
+  if (score >= 18000) return { key: 'mid', label: 'Clase Media', multiplier: 1.12, robProtectionChance: 0.12 };
+  if (score >= 7000) return { key: 'mid_low', label: 'Clase Media Baja', multiplier: 1.06, robProtectionChance: 0.07 };
+  if (score >= 2500) return { key: 'low_plus', label: 'Clase Baja+', multiplier: 1.02, robProtectionChance: 0.03 };
+  return { key: 'low', label: 'Clase Baja', multiplier: 1, robProtectionChance: 0 };
+}
+
+function getPrestigeMultiplier(user) {
+  return 1 + (user.prestige * 0.1);
+}
+
+function applyWinMultiplier(user, baseAmount) {
+  const now = Date.now();
+  const socialClass = getSocialClass(user);
+  const espressoMultiplier = user.effects.doubleWorkUntil > now ? 2 : 1;
+  const prestigeMultiplier = getPrestigeMultiplier(user);
+  const totalMultiplier = socialClass.multiplier * espressoMultiplier * prestigeMultiplier;
+  return {
+    amount: Math.max(1, Math.floor(baseAmount * totalMultiplier)),
+    totalMultiplier,
+    socialMultiplier: socialClass.multiplier,
+    espressoMultiplier,
+    prestigeMultiplier
+  };
 }
 
 async function ensureUser(userId) {
@@ -202,11 +253,13 @@ async function useItem(userId, itemKey, options = {}) {
       if (rollChance < 0.9) {
         state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'lose', reward: 0, at: new Date().toISOString() };
       } else if (rollChance < 0.99) {
-        user.wallet += 1000;
-        state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'win_1000', reward: 1000, at: new Date().toISOString() };
+        const winResult = applyWinMultiplier(user, 1000);
+        user.wallet += winResult.amount;
+        state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'win_1000', reward: winResult.amount, baseReward: 1000, multiplier: winResult.totalMultiplier, at: new Date().toISOString() };
       } else {
-        user.wallet += 10000;
-        state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'jackpot', reward: 10000, at: new Date().toISOString() };
+        const winResult = applyWinMultiplier(user, 10000);
+        user.wallet += winResult.amount;
+        state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'jackpot', reward: winResult.amount, baseReward: 10000, multiplier: winResult.totalMultiplier, at: new Date().toISOString() };
       }
     } else if (itemKey === 'banana_peel') {
       target.lastWork = Math.max(target.lastWork, now) + (15 * 60 * 1000);
@@ -214,14 +267,14 @@ async function useItem(userId, itemKey, options = {}) {
       state.users[targetId] = target;
       state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, targetId, result: 'work_penalty', at: new Date().toISOString() };
     } else if (itemKey === 'energy_drink') {
+      user.lastDaily = 0;
       user.lastWork = 0;
+      user.lastRoll = 0;
+      user.lastRob = 0;
       state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'work_reset', at: new Date().toISOString() };
-    } else if (itemKey === 'lock') {
+    } else if (itemKey === 'lock' || itemKey === 'trick_dice') {
       addItem(user, itemKey, 1);
-      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'passive_lock_kept', at: new Date().toISOString() };
-    } else if (itemKey === 'trick_dice') {
-      addItem(user, itemKey, 1);
-      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'passive_dice_kept', at: new Date().toISOString() };
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'passive_item_kept', at: new Date().toISOString() };
     } else if (itemKey === 'balaclava') {
       user.effects.robberMaskEquipped = true;
       state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'mask_equipped', at: new Date().toISOString() };
@@ -230,7 +283,7 @@ async function useItem(userId, itemKey, options = {}) {
       state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'double_work', until: user.effects.doubleWorkUntil, at: new Date().toISOString() };
     } else if (itemKey === 'briefcase') {
       addItem(user, itemKey, 1);
-      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'passive_briefcase_kept', at: new Date().toISOString() };
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'passive_item_kept', at: new Date().toISOString() };
     } else if (itemKey === 'usb') {
       const stolen = Math.floor(target.bank * 0.1);
       target.bank -= stolen;
@@ -318,6 +371,7 @@ async function getStatus(userId) {
   const user = await getUser(userId);
   const now = Date.now();
   const activeItems = [];
+  const socialClass = getSocialClass(user);
 
   if (user.effects.cafeUntil > now) {
     activeItems.push({
@@ -353,7 +407,12 @@ async function getStatus(userId) {
     total: user.wallet + user.bank,
     cooldownMultiplier: getCooldownMultiplier(user, now),
     activeItems,
-    inventory: { ...user.inventory }
+    inventory: { ...user.inventory },
+    socialClass: socialClass.label,
+    socialClassKey: socialClass.key,
+    prestige: user.prestige || 0,
+    prestigePending: Boolean(user.effects.prestigePending),
+    inventoryValue: getInventoryValue(user)
   };
 }
 
@@ -372,14 +431,15 @@ async function claimDaily(userId) {
     }
 
     user.dailyStreak = now - user.lastDaily < baseCooldown * 2 ? user.dailyStreak + 1 : 1;
-    const reward = 500 + user.dailyStreak * 50;
-
+    const baseReward = 500 + user.dailyStreak * 50;
+    const rewardResult = applyWinMultiplier(user, baseReward);
+    const reward = rewardResult.amount;
     user.wallet += reward;
     user.lastDaily = now;
     user.updatedAt = new Date().toISOString();
 
     state.users[normalized] = user;
-    state.lastTransaction = { type: 'daily', userId: normalized, reward, streak: user.dailyStreak, at: user.updatedAt };
+    state.lastTransaction = { type: 'daily', userId: normalized, reward, baseReward, streak: user.dailyStreak, multiplier: rewardResult.totalMultiplier, at: user.updatedAt };
     return state;
   }).then((state) => state.lastTransaction);
 }
@@ -387,7 +447,7 @@ async function claimDaily(userId) {
 async function work(userId) {
   const normalized = normalizeId(userId);
   const now = Date.now();
-  const baseCooldown = 3 * 60 * 1000;
+  const baseCooldown = 10 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
@@ -399,14 +459,14 @@ async function work(userId) {
     }
 
     const salary = Math.floor(Math.random() * (200 - 50 + 1)) + 50;
-    const multiplier = user.effects.doubleWorkUntil > now ? 2 : 1;
-    const finalSalary = salary * multiplier;
+    const winResult = applyWinMultiplier(user, salary);
+    const finalSalary = winResult.amount;
     user.wallet += finalSalary;
     user.lastWork = now;
     user.updatedAt = new Date().toISOString();
 
     state.users[normalized] = user;
-    state.lastTransaction = { type: 'work', userId: normalized, salary: finalSalary, baseSalary: salary, multiplier, at: user.updatedAt };
+    state.lastTransaction = { type: 'work', userId: normalized, salary: finalSalary, baseSalary: salary, multiplier: winResult.totalMultiplier, at: user.updatedAt };
     return state;
   }).then((state) => state.lastTransaction);
 }
@@ -428,9 +488,11 @@ async function roll(userId) {
     const forcedSuccess = consumeItem(user, 'trick_dice', 1);
     const success = forcedSuccess ? true : Math.random() < 0.4;
     if (success) {
-      const reward = Math.floor(Math.random() * (300 - 100 + 1)) + 100;
+      const baseReward = Math.floor(Math.random() * (300 - 100 + 1)) + 100;
+      const winResult = applyWinMultiplier(user, baseReward);
+      const reward = winResult.amount;
       user.wallet += reward;
-      state.lastTransaction = { type: 'roll', userId: normalized, success, reward, forcedSuccess, at: new Date().toISOString() };
+      state.lastTransaction = { type: 'roll', userId: normalized, success, reward, baseReward, forcedSuccess, multiplier: winResult.totalMultiplier, at: new Date().toISOString() };
     } else {
       const fine = 200;
       user.wallet = Math.max(0, user.wallet - fine);
@@ -458,6 +520,7 @@ async function rob(thiefId, victimId) {
     const thief = normalizeEconomyUserShape(state.users[normalizedThief]);
     const victim = normalizeEconomyUserShape(state.users[normalizedVictim]);
     const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(thief, now));
+    const thiefClass = getSocialClass(thief);
 
     if (now - thief.lastRob < cooldown) {
       throw new Error('ROB_COOLDOWN');
@@ -484,6 +547,8 @@ async function rob(thiefId, victimId) {
     } else {
       if (consumeItem(thief, 'briefcase', 1)) {
         state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, fine: 0, usedBriefcase: true, usedMask, at: new Date().toISOString() };
+      } else if (Math.random() < thiefClass.robProtectionChance) {
+        state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, fine: 0, evadedSanction: true, usedMask, at: new Date().toISOString() };
       } else {
         const fine = 200;
         thief.wallet = Math.max(0, thief.wallet - fine);
@@ -519,6 +584,56 @@ async function getLeaderboard(limit = 10) {
     .slice(0, limit);
 }
 
+async function requestPrestige(userId) {
+  const normalized = normalizeId(userId);
+  const data = await economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+    const socialClass = getSocialClass(user);
+    const assets = user.wallet + user.bank + getInventoryValue(user);
+
+    if (assets < 15000 || ['low', 'low_plus', 'mid_low', 'mid'].includes(socialClass.key)) {
+      throw new Error('PRESTIGE_REQUIREMENTS');
+    }
+
+    user.effects.prestigePending = true;
+    user.updatedAt = new Date().toISOString();
+    state.users[normalized] = user;
+    return state;
+  });
+
+  return data.users[normalized];
+}
+
+async function confirmPrestige(userId) {
+  const normalized = normalizeId(userId);
+  return economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+
+    if (!user.effects.prestigePending) {
+      throw new Error('PRESTIGE_NOT_PENDING');
+    }
+
+    user.wallet = 0;
+    user.bank = 0;
+    user.inventory = {};
+    user.dailyStreak = 0;
+    user.lastDaily = 0;
+    user.lastWork = 0;
+    user.lastRob = 0;
+    user.lastRoll = 0;
+    user.effects.cafeUntil = 0;
+    user.effects.doubleWorkUntil = 0;
+    user.effects.robberMaskEquipped = false;
+    user.effects.prestigePending = false;
+    user.prestige += 1;
+    user.updatedAt = new Date().toISOString();
+
+    state.users[normalized] = user;
+    state.lastTransaction = { type: 'prestige', userId: normalized, prestige: user.prestige, at: user.updatedAt };
+    return state;
+  }).then((state) => state.lastTransaction);
+}
+
 module.exports = {
   ensureUser,
   getUser,
@@ -529,6 +644,7 @@ module.exports = {
   buyItem,
   listInventory,
   useItem,
+  getSocialClass,
   pay,
   buyCafe,
   getStatus,
@@ -536,5 +652,7 @@ module.exports = {
   work,
   roll,
   rob,
-  getLeaderboard
+  getLeaderboard,
+  requestPrestige,
+  confirmPrestige
 };

@@ -39,7 +39,26 @@ module.exports = {
     }
 
     if (action !== 'buy') {
-      await message.reply('⚠️ Comando inválido. Usa *!shop [categoria] [pagina]* o *!shop buy [item]*.');
+      if (action === 'info') {
+        const itemQuery = args.slice(1).join(' ');
+        if (!itemQuery) {
+          await message.reply('⚠️ Usa *!shop info [item]* para ver detalles.');
+          return;
+        }
+
+        try {
+          const item = shopService.getItemInfo(itemQuery);
+          await message.reply(`${item.emoji} *${item.name}*\n💴 Precio: *${item.price} Yenes*\n🏷️ Categoría: *${item.category}*\n🧩 Tipo: *${item.usable ? 'Manual' : 'Pasivo'}*\n📌 ${item.description}`);
+          return;
+        } catch (error) {
+          if (error.message === 'SHOP_ITEM_NOT_FOUND') {
+            await message.reply('❌ No encontré ese ítem en la tienda.');
+            return;
+          }
+          throw error;
+        }
+      }
+      await message.reply('⚠️ Comando inválido. Usa *!shop [categoria] [pagina]*, *!shop buy [item]* o *!shop info [item]*.');
       return;
     }
 

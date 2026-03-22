@@ -27,6 +27,10 @@ module.exports = {
           await message.reply('💼 Usaste tu Maletín de Soborno: sin multa y sin cooldown de robo.');
           return;
         }
+        if (tx.evadedSanction) {
+          await message.reply('🛡️ Tu clase social te protegió: evitaste multa y cooldown esta vez.');
+          return;
+        }
         await message.reply(`🚓 ¡Te atraparon! Pagaste **${tx.fine} Yenes** de multa.`);
       }
     } catch (error) {

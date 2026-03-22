@@ -35,7 +35,7 @@ module.exports = {
       }
 
       if (tx.item.key === 'energy_drink') {
-        await message.reply('⚡ Energía al máximo: tu cooldown de *!work* fue reiniciado.');
+        await message.reply('⚡ Energía al máximo: todos tus cooldowns de economía fueron reiniciados.');
         return;
       }
 
