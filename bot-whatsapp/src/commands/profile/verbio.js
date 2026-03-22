@@ -1,6 +1,7 @@
 const fs = require('fs');
 const { MessageMedia } = require('whatsapp-web.js');
 const fichaService = require('../../services/fichaService');
+const economyService = require('../../services/economyService');
 const { getTargetUser } = require('../../utils/mentions');
 
 module.exports = {
@@ -30,7 +31,10 @@ module.exports = {
       // Ignore contact lookup failures and fallback to numeric id.
     }
 
-    const caption = `*Ficha de @${userNumber}*:\n\n${profile.description}`;
+    const inventory = await economyService.listInventory(targetId);
+    const crownIcon = inventory.crown > 0 ? ' 👑' : '';
+    const status = await economyService.getStatus(targetId);
+    const caption = `*Ficha de @${userNumber}${crownIcon}*\n*Clase social:* ${status.socialClass}\n*Prestigio:* ${status.prestige}\n\n${profile.description}`;
 
     if (profile.photoFileName) {
       const filePath = fichaService.resolveProfileImagePath(profile.photoFileName);

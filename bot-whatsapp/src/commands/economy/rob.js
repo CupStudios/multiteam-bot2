@@ -1,24 +1,44 @@
 const economyService = require('../../services/economyService');
+const { normalizeId } = require('../../utils/ids');
 
 module.exports = {
   name: 'rob',
-  async execute({ message }) {
-    const mentions = await message.getMentions();
-    if (mentions.length === 0) {
+  async execute({ client, message }) {
+    const mentionedIds = Array.isArray(message.mentionedIds) ? message.mentionedIds : [];
+    if (mentionedIds.length === 0) {
       await message.reply('❌ Menciona a quién quieres robar.');
       return;
     }
 
     const senderId = message.author || message.from;
-    const victimId = mentions[0].id._serialized;
+    const victimId = normalizeId(mentionedIds[0]);
+    let victimUser = victimId.split('@')[0];
+    try {
+      const contact = await client.getContactById(victimId);
+      victimUser = contact.id.user || victimUser;
+    } catch {
+      // fallback to parsed id
+    }
 
     try {
       const tx = await economyService.rob(senderId, victimId);
-      if (tx.success) {
-        await message.reply(`🥷 ¡Éxito! Le robaste **${tx.stolen} Yenes** a @${mentions[0].id.user}`, undefined, {
+      if (tx.blockedByLock) {
+        await message.reply(`🔒 @${victimUser} tenía un Candado de Bolsillo. ¡Robo bloqueado!`, undefined, {
+          mentions: [victimId]
+        });
+      } else if (tx.success) {
+        await message.reply(`🥷 ¡Éxito! Le robaste **${tx.stolen} Yenes** a @${victimUser}`, undefined, {
           mentions: [victimId]
         });
       } else {
+        if (tx.usedBriefcase) {
+          await message.reply('💼 Usaste tu Maletín de Soborno: sin multa y sin cooldown de robo.');
+          return;
+        }
+        if (tx.evadedSanction) {
+          await message.reply('🛡️ Tu clase social te protegió: evitaste multa y cooldown esta vez.');
+          return;
+        }
         await message.reply(`🚓 ¡Te atraparon! Pagaste **${tx.fine} Yenes** de multa.`);
       }
     } catch (error) {

@@ -1,10 +1,13 @@
 const path = require('path');
 const { JsonDb } = require('../database/db');
 const { normalizeId } = require('../utils/ids');
+const { findItemByKey } = require('./shopCatalog');
 
 const economyDb = new JsonDb(path.resolve(__dirname, '../database/economy.json'), {
   users: {}
 });
+const PRESTIGE_MIN_ASSETS = 15000;
+const PRESTIGE_ALLOWED_CLASSES = new Set(['mid_plus', 'upper', 'upper_plus', 'elite']);
 
 function createDefaultEconomyUser() {
   return {
@@ -15,12 +18,22 @@ function createDefaultEconomyUser() {
     lastWork: 0,
     lastRob: 0,
     lastRoll: 0,
+    effects: {
+      cafeUntil: 0,
+      doubleWorkUntil: 0,
+      robberMaskEquipped: false,
+      prestigePending: false
+    },
+    inventory: {},
+    prestige: 0,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 }
 
 function normalizeEconomyUserShape(user = {}) {
+  const effects = user.effects && typeof user.effects === 'object' ? user.effects : {};
+  const inventory = user.inventory && typeof user.inventory === 'object' ? user.inventory : {};
   return {
     ...createDefaultEconomyUser(),
     ...user,
@@ -32,7 +45,93 @@ function normalizeEconomyUserShape(user = {}) {
     lastWork: typeof user.lastWork === 'number' ? user.lastWork : 0,
     lastRob: typeof user.lastRob === 'number' ? user.lastRob : 0,
     lastRoll: typeof user.lastRoll === 'number' ? user.lastRoll : 0,
+    effects: {
+      cafeUntil: typeof effects.cafeUntil === 'number' ? effects.cafeUntil : 0,
+      doubleWorkUntil: typeof effects.doubleWorkUntil === 'number' ? effects.doubleWorkUntil : 0,
+      robberMaskEquipped: Boolean(effects.robberMaskEquipped),
+      prestigePending: Boolean(effects.prestigePending)
+    },
+    inventory: { ...inventory },
+    prestige: typeof user.prestige === 'number' ? user.prestige : 0,
     updatedAt: new Date().toISOString()
+  };
+}
+
+function getCooldownMultiplier(user, now = Date.now()) {
+  const cafeMultiplier = user.effects.cafeUntil > now ? 0.5 : 1;
+  const prestigeCooldownMultiplier = Math.max(0.7, 1 - ((user.prestige || 0) * 0.03));
+  return cafeMultiplier * prestigeCooldownMultiplier;
+}
+
+function formatRemainingMs(ms) {
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return { minutes, seconds };
+}
+
+function getItemCount(user, itemKey) {
+  return Number.isInteger(user.inventory?.[itemKey]) ? user.inventory[itemKey] : 0;
+}
+
+function addItem(user, itemKey, quantity = 1) {
+  const current = getItemCount(user, itemKey);
+  user.inventory[itemKey] = current + quantity;
+}
+
+function consumeItem(user, itemKey, quantity = 1) {
+  const current = getItemCount(user, itemKey);
+  if (current < quantity) return false;
+  const next = current - quantity;
+  if (next <= 0) {
+    delete user.inventory[itemKey];
+  } else {
+    user.inventory[itemKey] = next;
+  }
+  return true;
+}
+
+function getInventoryValue(user) {
+  let value = 0;
+  for (const [itemKey, qty] of Object.entries(user.inventory || {})) {
+    const item = findItemByKey(itemKey);
+    if (!item) continue;
+    value += item.price * qty;
+  }
+  return value;
+}
+
+function getSocialClass(user) {
+  const moneyValue = user.wallet + user.bank;
+  const inventoryValue = getInventoryValue(user);
+  const score = (inventoryValue * 3) + moneyValue;
+
+  if (score >= 200000) return { key: 'elite', label: 'Alta Nobleza', multiplier: 1.5, robProtectionChance: 0.4 };
+  if (score >= 120000) return { key: 'upper_plus', label: 'Clase Alta+', multiplier: 1.4, robProtectionChance: 0.33 };
+  if (score >= 70000) return { key: 'upper', label: 'Clase Alta', multiplier: 1.3, robProtectionChance: 0.26 };
+  if (score >= 35000) return { key: 'mid_plus', label: 'Clase Media Alta', multiplier: 1.2, robProtectionChance: 0.18 };
+  if (score >= 18000) return { key: 'mid', label: 'Clase Media', multiplier: 1.12, robProtectionChance: 0.12 };
+  if (score >= 7000) return { key: 'mid_low', label: 'Clase Media Baja', multiplier: 1.06, robProtectionChance: 0.07 };
+  if (score >= 2500) return { key: 'low_plus', label: 'Clase Baja+', multiplier: 1.02, robProtectionChance: 0.03 };
+  return { key: 'low', label: 'Clase Baja', multiplier: 1, robProtectionChance: 0 };
+}
+
+function getPrestigeMultiplier(user) {
+  return 1 + (user.prestige * 0.1);
+}
+
+function applyWinMultiplier(user, baseAmount) {
+  const now = Date.now();
+  const socialClass = getSocialClass(user);
+  const espressoMultiplier = user.effects.doubleWorkUntil > now ? 2 : 1;
+  const prestigeMultiplier = getPrestigeMultiplier(user);
+  const totalMultiplier = socialClass.multiplier * espressoMultiplier * prestigeMultiplier;
+  return {
+    amount: Math.max(1, Math.floor(baseAmount * totalMultiplier)),
+    totalMultiplier,
+    socialMultiplier: socialClass.multiplier,
+    espressoMultiplier,
+    prestigeMultiplier
   };
 }
 
@@ -110,28 +209,244 @@ async function transferToWallet(userId, amountText) {
   return data.lastTransaction.amount;
 }
 
-async function claimDaily(userId) {
+async function buyItem(userId, itemKey, price, quantity = 1) {
   const normalized = normalizeId(userId);
-  const now = Date.now();
-  const oneDay = 24 * 60 * 60 * 1000;
+  const parsedQuantity = Number.parseInt(quantity, 10);
+  if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
+    throw new Error('SHOP_INVALID_QUANTITY');
+  }
+  const totalPrice = price * parsedQuantity;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
 
-    if (now - user.lastDaily < oneDay) {
-      const hoursLeft = Math.ceil((oneDay - (now - user.lastDaily)) / (1000 * 60 * 60));
+    if (user.wallet < totalPrice) {
+      throw new Error('SHOP_NO_FUNDS');
+    }
+
+    user.wallet -= totalPrice;
+    addItem(user, itemKey, parsedQuantity);
+    user.updatedAt = new Date().toISOString();
+    state.users[normalized] = user;
+    state.lastTransaction = { type: 'shop', userId: normalized, itemKey, price, quantity: parsedQuantity, totalPrice, at: user.updatedAt };
+    return state;
+  }).then((state) => state.lastTransaction);
+}
+
+async function listInventory(userId) {
+  const user = await getUser(userId);
+  return { ...user.inventory };
+}
+
+async function useItem(userId, itemKey, options = {}) {
+  const normalized = normalizeId(userId);
+  const now = Date.now();
+  const targetId = options.targetId ? normalizeId(options.targetId) : null;
+
+  return economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+    const target = targetId ? normalizeEconomyUserShape(state.users[targetId]) : null;
+
+    if ((itemKey === 'banana_peel' || itemKey === 'usb') && (!targetId || !target || targetId === normalized)) {
+      throw new Error('ITEM_TARGET_REQUIRED');
+    }
+
+    if (!consumeItem(user, itemKey, 1)) {
+      throw new Error('ITEM_NOT_OWNED');
+    }
+
+    if (itemKey === 'lottery_ticket') {
+      const rollChance = Math.random();
+      if (rollChance < 0.9) {
+        state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'lose', reward: 0, at: new Date().toISOString() };
+      } else if (rollChance < 0.99) {
+        const winResult = applyWinMultiplier(user, 1000);
+        user.wallet += winResult.amount;
+        state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'win_1000', reward: winResult.amount, baseReward: 1000, multiplier: winResult.totalMultiplier, at: new Date().toISOString() };
+      } else {
+        const winResult = applyWinMultiplier(user, 10000);
+        user.wallet += winResult.amount;
+        state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'jackpot', reward: winResult.amount, baseReward: 10000, multiplier: winResult.totalMultiplier, at: new Date().toISOString() };
+      }
+    } else if (itemKey === 'banana_peel') {
+      target.lastWork = Math.max(target.lastWork, now) + (15 * 60 * 1000);
+      target.updatedAt = new Date().toISOString();
+      state.users[targetId] = target;
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, targetId, result: 'work_penalty', at: new Date().toISOString() };
+    } else if (itemKey === 'energy_drink') {
+      user.lastDaily = 0;
+      user.lastWork = 0;
+      user.lastRoll = 0;
+      user.lastRob = 0;
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'work_reset', at: new Date().toISOString() };
+    } else if (itemKey === 'lock' || itemKey === 'trick_dice') {
+      addItem(user, itemKey, 1);
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'passive_item_kept', at: new Date().toISOString() };
+    } else if (itemKey === 'balaclava') {
+      user.effects.robberMaskEquipped = true;
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'mask_equipped', at: new Date().toISOString() };
+    } else if (itemKey === 'double_espresso') {
+      user.effects.doubleWorkUntil = Math.max(user.effects.doubleWorkUntil, now) + (2 * 60 * 60 * 1000);
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'double_work', until: user.effects.doubleWorkUntil, at: new Date().toISOString() };
+    } else if (itemKey === 'briefcase') {
+      addItem(user, itemKey, 1);
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'passive_item_kept', at: new Date().toISOString() };
+    } else if (itemKey === 'usb') {
+      const stolen = Math.floor(target.bank * 0.1);
+      target.bank -= stolen;
+      user.wallet += stolen;
+      target.updatedAt = new Date().toISOString();
+      state.users[targetId] = target;
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, targetId, result: 'bank_hack', stolen, at: new Date().toISOString() };
+    } else if (itemKey === 'crown') {
+      addItem(user, itemKey, 1);
+      state.lastTransaction = { type: 'use_item', userId: normalized, itemKey, result: 'status_item_kept', at: new Date().toISOString() };
+    } else {
+      throw new Error('ITEM_NOT_USABLE');
+    }
+
+    user.updatedAt = new Date().toISOString();
+    state.users[normalized] = user;
+    return state;
+  }).then((state) => state.lastTransaction);
+}
+
+async function pay(senderId, receiverId, amountText) {
+  const normalizedSender = normalizeId(senderId);
+  const normalizedReceiver = normalizeId(receiverId);
+  const amount = Number.parseInt(amountText, 10);
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('INVALID_PAY_AMOUNT');
+  }
+
+  if (normalizedSender === normalizedReceiver) {
+    throw new Error('PAY_SELF');
+  }
+
+  return economyDb.update(async (state) => {
+    const sender = normalizeEconomyUserShape(state.users[normalizedSender]);
+    const receiver = normalizeEconomyUserShape(state.users[normalizedReceiver]);
+
+    if (sender.wallet < amount) {
+      throw new Error('PAY_NO_FUNDS');
+    }
+
+    sender.wallet -= amount;
+    receiver.wallet += amount;
+    sender.updatedAt = new Date().toISOString();
+    receiver.updatedAt = sender.updatedAt;
+
+    state.users[normalizedSender] = sender;
+    state.users[normalizedReceiver] = receiver;
+    state.lastTransaction = { type: 'pay', senderId: normalizedSender, receiverId: normalizedReceiver, amount, at: sender.updatedAt };
+    return state;
+  }).then((state) => state.lastTransaction);
+}
+
+async function buyCafe(userId) {
+  const normalized = normalizeId(userId);
+  const price = 1200;
+  const durationMs = 30 * 60 * 1000;
+  const now = Date.now();
+
+  return economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+
+    if (user.wallet < price) {
+      throw new Error('SHOP_NO_FUNDS');
+    }
+
+    user.wallet -= price;
+    user.effects.cafeUntil = Math.max(user.effects.cafeUntil, now) + durationMs;
+    user.updatedAt = new Date().toISOString();
+
+    state.users[normalized] = user;
+    state.lastTransaction = {
+      type: 'shop',
+      item: 'cafe',
+      userId: normalized,
+      price,
+      activeUntil: user.effects.cafeUntil,
+      at: user.updatedAt
+    };
+    return state;
+  }).then((state) => state.lastTransaction);
+}
+
+async function getStatus(userId) {
+  const user = await getUser(userId);
+  const now = Date.now();
+  const activeItems = [];
+  const socialClass = getSocialClass(user);
+
+  if (user.effects.cafeUntil > now) {
+    activeItems.push({
+      key: 'cafe',
+      name: 'Café',
+      description: 'Reduce a la mitad los cooldowns de economía.',
+      remainingMs: user.effects.cafeUntil - now,
+      remaining: formatRemainingMs(user.effects.cafeUntil - now)
+    });
+  }
+  if (user.effects.doubleWorkUntil > now) {
+    activeItems.push({
+      key: 'double_espresso',
+      name: 'Café Expreso Doble',
+      description: 'Duplica el sueldo de !work.',
+      remainingMs: user.effects.doubleWorkUntil - now,
+      remaining: formatRemainingMs(user.effects.doubleWorkUntil - now)
+    });
+  }
+  if (user.effects.robberMaskEquipped) {
+    activeItems.push({
+      key: 'balaclava',
+      name: 'Pasamontañas',
+      description: 'El próximo !rob tendrá 80% de éxito.',
+      remainingMs: 0,
+      remaining: { minutes: 0, seconds: 0 }
+    });
+  }
+
+  return {
+    wallet: user.wallet,
+    bank: user.bank,
+    total: user.wallet + user.bank,
+    cooldownMultiplier: getCooldownMultiplier(user, now),
+    activeItems,
+    inventory: { ...user.inventory },
+    socialClass: socialClass.label,
+    socialClassKey: socialClass.key,
+    prestige: user.prestige || 0,
+    prestigePending: Boolean(user.effects.prestigePending),
+    inventoryValue: getInventoryValue(user)
+  };
+}
+
+async function claimDaily(userId) {
+  const normalized = normalizeId(userId);
+  const now = Date.now();
+  const baseCooldown = 24 * 60 * 60 * 1000;
+
+  return economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(user, now));
+
+    if (now - user.lastDaily < cooldown) {
+      const hoursLeft = Math.ceil((cooldown - (now - user.lastDaily)) / (1000 * 60 * 60));
       throw new Error(`DAILY_COOLDOWN:${hoursLeft}`);
     }
 
-    user.dailyStreak = now - user.lastDaily < oneDay * 2 ? user.dailyStreak + 1 : 1;
-    const reward = 500 + user.dailyStreak * 50;
-
+    user.dailyStreak = now - user.lastDaily < baseCooldown * 2 ? user.dailyStreak + 1 : 1;
+    const baseReward = 500 + user.dailyStreak * 50;
+    const rewardResult = applyWinMultiplier(user, baseReward);
+    const reward = rewardResult.amount;
     user.wallet += reward;
     user.lastDaily = now;
     user.updatedAt = new Date().toISOString();
 
     state.users[normalized] = user;
-    state.lastTransaction = { type: 'daily', userId: normalized, reward, streak: user.dailyStreak, at: user.updatedAt };
+    state.lastTransaction = { type: 'daily', userId: normalized, reward, baseReward, streak: user.dailyStreak, multiplier: rewardResult.totalMultiplier, at: user.updatedAt };
     return state;
   }).then((state) => state.lastTransaction);
 }
@@ -139,10 +454,11 @@ async function claimDaily(userId) {
 async function work(userId) {
   const normalized = normalizeId(userId);
   const now = Date.now();
-  const cooldown = 10 * 60 * 1000;
+  const baseCooldown = 3 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(user, now));
 
     if (now - user.lastWork < cooldown) {
       const minutesLeft = Math.ceil((cooldown - (now - user.lastWork)) / (1000 * 60));
@@ -150,12 +466,14 @@ async function work(userId) {
     }
 
     const salary = Math.floor(Math.random() * (200 - 50 + 1)) + 50;
-    user.wallet += salary;
+    const winResult = applyWinMultiplier(user, salary);
+    const finalSalary = winResult.amount;
+    user.wallet += finalSalary;
     user.lastWork = now;
     user.updatedAt = new Date().toISOString();
 
     state.users[normalized] = user;
-    state.lastTransaction = { type: 'work', userId: normalized, salary, at: user.updatedAt };
+    state.lastTransaction = { type: 'work', userId: normalized, salary: finalSalary, baseSalary: salary, multiplier: winResult.totalMultiplier, at: user.updatedAt };
     return state;
   }).then((state) => state.lastTransaction);
 }
@@ -163,25 +481,29 @@ async function work(userId) {
 async function roll(userId) {
   const normalized = normalizeId(userId);
   const now = Date.now();
-  const cooldown = 2 * 60 * 1000;
+  const baseCooldown = 2 * 60 * 1000;
 
   return economyDb.update(async (state) => {
     const user = normalizeEconomyUserShape(state.users[normalized]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(user, now));
 
     if (now - user.lastRoll < cooldown) {
       const minutesLeft = Math.ceil((cooldown - (now - user.lastRoll)) / (1000 * 60));
       throw new Error(`ROLL_COOLDOWN:${minutesLeft}`);
     }
 
-    const success = Math.random() < 0.4;
+    const forcedSuccess = consumeItem(user, 'trick_dice', 1);
+    const success = forcedSuccess ? true : Math.random() < 0.4;
     if (success) {
-      const reward = Math.floor(Math.random() * (300 - 100 + 1)) + 100;
+      const baseReward = Math.floor(Math.random() * (300 - 100 + 1)) + 100;
+      const winResult = applyWinMultiplier(user, baseReward);
+      const reward = winResult.amount;
       user.wallet += reward;
-      state.lastTransaction = { type: 'roll', userId: normalized, success, reward, at: new Date().toISOString() };
+      state.lastTransaction = { type: 'roll', userId: normalized, success, reward, baseReward, forcedSuccess, multiplier: winResult.totalMultiplier, at: new Date().toISOString() };
     } else {
       const fine = 200;
       user.wallet = Math.max(0, user.wallet - fine);
-      state.lastTransaction = { type: 'roll', userId: normalized, success, fine, at: new Date().toISOString() };
+      state.lastTransaction = { type: 'roll', userId: normalized, success, fine, forcedSuccess, at: new Date().toISOString() };
     }
 
     user.lastRoll = now;
@@ -195,7 +517,7 @@ async function rob(thiefId, victimId) {
   const normalizedThief = normalizeId(thiefId);
   const normalizedVictim = normalizeId(victimId);
   const now = Date.now();
-  const cooldown = 30 * 60 * 1000;
+  const baseCooldown = 30 * 60 * 1000;
 
   if (normalizedThief === normalizedVictim) {
     throw new Error('ROB_SELF');
@@ -204,6 +526,8 @@ async function rob(thiefId, victimId) {
   return economyDb.update(async (state) => {
     const thief = normalizeEconomyUserShape(state.users[normalizedThief]);
     const victim = normalizeEconomyUserShape(state.users[normalizedVictim]);
+    const cooldown = Math.floor(baseCooldown * getCooldownMultiplier(thief, now));
+    const thiefClass = getSocialClass(thief);
 
     if (now - thief.lastRob < cooldown) {
       throw new Error('ROB_COOLDOWN');
@@ -213,20 +537,35 @@ async function rob(thiefId, victimId) {
       throw new Error('ROB_POOR_TARGET');
     }
 
-    const success = Math.random() < 0.4;
+    const usedMask = thief.effects.robberMaskEquipped && consumeItem(thief, 'balaclava', 1);
+    thief.effects.robberMaskEquipped = false;
+    const robChance = usedMask ? 0.8 : 0.4;
+    const success = Math.random() < robChance;
 
     if (success) {
+      if (consumeItem(victim, 'lock', 1)) {
+        state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success: false, blockedByLock: true, usedMask, at: new Date().toISOString() };
+      } else {
       const stolen = Math.floor(victim.wallet * (Math.random() * 0.5));
       thief.wallet += stolen;
       victim.wallet -= stolen;
-      state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, stolen, at: new Date().toISOString() };
+        state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, stolen, usedMask, at: new Date().toISOString() };
+      }
     } else {
-      const fine = 200;
-      thief.wallet = Math.max(0, thief.wallet - fine);
-      state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, fine, at: new Date().toISOString() };
+      if (consumeItem(thief, 'briefcase', 1)) {
+        state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, fine: 0, usedBriefcase: true, usedMask, at: new Date().toISOString() };
+      } else if (Math.random() < thiefClass.robProtectionChance) {
+        state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, fine: 0, evadedSanction: true, usedMask, at: new Date().toISOString() };
+      } else {
+        const fine = 200;
+        thief.wallet = Math.max(0, thief.wallet - fine);
+        state.lastTransaction = { type: 'rob', thiefId: normalizedThief, victimId: normalizedVictim, success, fine, usedMask, at: new Date().toISOString() };
+      }
     }
 
-    thief.lastRob = now;
+    if (!state.lastTransaction.usedBriefcase) {
+      thief.lastRob = now;
+    }
     thief.updatedAt = new Date().toISOString();
     victim.updatedAt = new Date().toISOString();
 
@@ -244,11 +583,76 @@ async function getLeaderboard(limit = 10) {
       const normalized = normalizeEconomyUserShape(user);
       return {
         id,
-        total: normalized.wallet + normalized.bank
+        total: normalized.wallet + normalized.bank,
+        hasCrown: getItemCount(normalized, 'crown') > 0
       };
     })
     .sort((a, b) => b.total - a.total)
     .slice(0, limit);
+}
+
+async function requestPrestige(userId) {
+  const normalized = normalizeId(userId);
+  const data = await economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+    const socialClass = getSocialClass(user);
+    const assets = user.wallet + user.bank + getInventoryValue(user);
+
+    if (assets < PRESTIGE_MIN_ASSETS || !PRESTIGE_ALLOWED_CLASSES.has(socialClass.key)) {
+      throw new Error('PRESTIGE_REQUIREMENTS');
+    }
+
+    user.effects.prestigePending = true;
+    user.updatedAt = new Date().toISOString();
+    state.users[normalized] = user;
+    return state;
+  });
+
+  return data.users[normalized];
+}
+
+async function getPrestigeRequirements(userId) {
+  const user = await getUser(userId);
+  const socialClass = getSocialClass(user);
+  const assets = user.wallet + user.bank + getInventoryValue(user);
+  return {
+    minAssets: PRESTIGE_MIN_ASSETS,
+    minClass: 'Clase Media Alta',
+    currentAssets: assets,
+    currentClass: socialClass.label,
+    meetsAssets: assets >= PRESTIGE_MIN_ASSETS,
+    meetsClass: PRESTIGE_ALLOWED_CLASSES.has(socialClass.key)
+  };
+}
+
+async function confirmPrestige(userId) {
+  const normalized = normalizeId(userId);
+  return economyDb.update(async (state) => {
+    const user = normalizeEconomyUserShape(state.users[normalized]);
+
+    if (!user.effects.prestigePending) {
+      throw new Error('PRESTIGE_NOT_PENDING');
+    }
+
+    user.wallet = 0;
+    user.bank = 0;
+    user.inventory = {};
+    user.dailyStreak = 0;
+    user.lastDaily = 0;
+    user.lastWork = 0;
+    user.lastRob = 0;
+    user.lastRoll = 0;
+    user.effects.cafeUntil = 0;
+    user.effects.doubleWorkUntil = 0;
+    user.effects.robberMaskEquipped = false;
+    user.effects.prestigePending = false;
+    user.prestige += 1;
+    user.updatedAt = new Date().toISOString();
+
+    state.users[normalized] = user;
+    state.lastTransaction = { type: 'prestige', userId: normalized, prestige: user.prestige, at: user.updatedAt };
+    return state;
+  }).then((state) => state.lastTransaction);
 }
 
 module.exports = {
@@ -258,9 +662,19 @@ module.exports = {
   getWalletBank,
   transferToBank,
   transferToWallet,
+  buyItem,
+  listInventory,
+  useItem,
+  getSocialClass,
+  pay,
+  buyCafe,
+  getStatus,
   claimDaily,
   work,
   roll,
   rob,
-  getLeaderboard
+  getLeaderboard,
+  requestPrestige,
+  confirmPrestige,
+  getPrestigeRequirements
 };
