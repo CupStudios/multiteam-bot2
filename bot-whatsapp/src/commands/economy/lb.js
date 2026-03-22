@@ -19,9 +19,11 @@ module.exports = {
         const contact = await client.getContactById(item.id);
         const name = contact.pushname || item.id.split('@')[0];
         const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '•';
-        text += `${medal} *${name}*: 💴 ${item.total} Yenes\n`;
+        const crown = item.hasCrown ? ' 👑' : '';
+        text += `${medal} *${name}${crown}*: 💴 ${item.total} Yenes\n`;
       } catch {
-        text += `• *Usuario* (${item.id.split('@')[0]}): 💴 ${item.total} Yenes\n`;
+        const crown = item.hasCrown ? ' 👑' : '';
+        text += `• *Usuario* (${item.id.split('@')[0]})${crown}: 💴 ${item.total} Yenes\n`;
       }
     }
 
